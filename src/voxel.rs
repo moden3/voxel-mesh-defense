@@ -9,16 +9,9 @@ pub enum VoxelType {
     Dirt,
 }
 
-/// ボクセルの変更を通知するイベント
-/// UIやメッシュ再生成システムがこれを購読して更新処理を行う
-#[derive(Event)]
-pub struct VoxelChangedEvent {
-    pub chunk_entity: Entity,
-}
-
 #[derive(Component)]
 pub struct Chunk {
-    voxels: [[[VoxelType; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE],
+    voxels: Vec<VoxelType>,
     pub is_dirty: bool, // メッシュの再生成が必要かどうかを判定するフラグ
 }
 
@@ -31,14 +24,20 @@ impl Default for Chunk {
 impl Chunk {
     pub fn new() -> Self {
         Self {
-            voxels: [[[VoxelType::Empty; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE],
+            // Stack Overflowを防ぐためVec(ヒープ)に確保
+            voxels: vec![VoxelType::Empty; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
             is_dirty: true, // 生成直後はメッシュ化が必要なためtrue
         }
     }
 
+    pub fn get_idx(x: usize, y: usize, z: usize) -> usize {
+        x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z
+    }
+
     pub fn set_voxel(&mut self, x: usize, y: usize, z: usize, voxel: VoxelType) {
         if x < CHUNK_SIZE && y < CHUNK_SIZE && z < CHUNK_SIZE {
-            self.voxels[x][y][z] = voxel;
+            let idx = Self::get_idx(x, y, z);
+            self.voxels[idx] = voxel;
             self.is_dirty = true;
         }
     }
@@ -48,7 +47,8 @@ impl Chunk {
         if x < 0 || y < 0 || z < 0 || x >= CHUNK_SIZE as i32 || y >= CHUNK_SIZE as i32 || z >= CHUNK_SIZE as i32 {
             return VoxelType::Empty;
         }
-        self.voxels[x as usize][y as usize][z as usize]
+        let idx = Self::get_idx(x as usize, y as usize, z as usize);
+        self.voxels[idx]
     }
 }
 
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn test_chunk_getVoxel_outOfBounds_returnsEmpty() {
-        // Arrange
+        // Arrange: 範囲外アクセスのテスト
         let chunk = Chunk::new();
 
         // Act
@@ -82,5 +82,26 @@ mod tests {
         // Assert
         assert_eq!(chunk.get_voxel(5, 5, 5), VoxelType::Stone, "指定座標のボクセルがStoneに変更されていること");
         assert!(chunk.is_dirty, "ボクセル変更時にis_dirtyフラグがtrueに設定されること");
+    }
+
+    #[test]
+    fn test_chunk_setVoxel_outOfBounds_doesNotPanic() {
+        // Arrange
+        let mut chunk = Chunk::new();
+
+        // Act: 範囲外への書き込みはパニックせず無視されること
+        chunk.set_voxel(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, VoxelType::Stone);
+
+        // Assert: 範囲外への書き込み後も正常に読み書きできること
+        assert_eq!(chunk.get_voxel(0, 0, 0), VoxelType::Empty, "境界外書き込み後もチャンクは正常であるべき");
+    }
+
+    #[test]
+    fn test_chunk_getIdx_linearMapping() {
+        // Arrange & Act & Assert
+        assert_eq!(Chunk::get_idx(0, 0, 0), 0);
+        assert_eq!(Chunk::get_idx(1, 0, 0), CHUNK_SIZE * CHUNK_SIZE);
+        assert_eq!(Chunk::get_idx(0, 1, 0), CHUNK_SIZE);
+        assert_eq!(Chunk::get_idx(0, 0, 1), 1);
     }
 }

@@ -1,59 +1,71 @@
 mod camera;
 mod voxel;
 mod voxel_render;
+mod picking;
+mod flow_field;
+mod swarm;
 
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 
 use camera::{fly_camera_system, FlyCamera};
-use voxel::{Chunk, VoxelChangedEvent, VoxelType, CHUNK_SIZE};
+use voxel::{Chunk, VoxelType, CHUNK_SIZE};
 use voxel_render::generate_chunk_system;
+use picking::mouse_picking_system;
+use flow_field::{update_flow_field_system, FlowField};
+use swarm::{spawn_worker_system, worker_movement_system};
 
 fn main() {
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     App::new()
-        .add_plugins(DefaultPlugins)
-        // カスタムイベントの登録
-        .add_event::<VoxelChangedEvent>()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                // ブラウザのキャンバス要素にウィンドウをフィットさせる
+                fit_canvas_to_parent: true,
+                // ブラウザのデフォルトキー操作（スクロール等）を無効化し、ゲームに全入力を渡す
+                prevent_default_event_handling: false,
+                title: "Voxel Mesh Defense".to_string(),
+                ..default()
+            }),
+            ..default()
+        }))
+        // カスタムイベントのObserver登録
+        .add_observer(update_flow_field_system)
+        .add_observer(spawn_worker_system)
         .add_systems(Startup, setup)
-        .add_systems(Update, (fly_camera_system, generate_chunk_system))
+        .add_systems(Update, (
+            fly_camera_system, 
+            generate_chunk_system,
+            mouse_picking_system,
+            worker_movement_system
+        ))
         .run();
 }
 
 fn setup(mut commands: Commands) {
-    // ライトの設定 (太陽光と環境光の疑似)
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
+    // ライトの設定
+    commands.spawn((
+        PointLight {
             shadows_enabled: true,
-            intensity: 1000000.0,
-            range: 100.0,
             ..default()
         },
-        transform: Transform::from_xyz(
-            CHUNK_SIZE as f32 / 2.0,
-            CHUNK_SIZE as f32 + 10.0,
-            CHUNK_SIZE as f32 / 2.0,
-        ),
-        ..default()
-    });
-
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
+        Transform::from_xyz(16.0, 30.0, 16.0),
+    ));
+       commands.spawn((
+        DirectionalLight {
             shadows_enabled: true,
-            illuminance: 10000.0,
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 100.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+        Transform::from_xyz(10.0, 50.0, 10.0).looking_at(Vec3::ZERO, Dir3::Y),
+    ));
 
     // プレイヤーカメラの設定
     commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_xyz(-10.0, CHUNK_SIZE as f32, -10.0)
-                .looking_at(Vec3::new(16.0, 16.0, 16.0), Vec3::Y),
-            ..default()
-        },
-        FlyCamera::default(),
+        Camera3d::default(),
+        Transform::from_xyz(16.0, 30.0, 30.0).looking_at(Vec3::new(16.0, 10.0, 16.0), Dir3::Y),
+        FlyCamera { speed: 10.0, sensitivity: 0.002, pitch: 0.0, yaw: 0.0 },
     ));
 
     // Perlin Noiseによる初期地形生成
@@ -69,7 +81,7 @@ fn setup(mut commands: Commands) {
 
             for y in 0..CHUNK_SIZE {
                 if y < height {
-                    if y < height - 3 {
+                    if y + 3 < height {
                         chunk.set_voxel(x, y, z, VoxelType::Stone);
                     } else {
                         chunk.set_voxel(x, y, z, VoxelType::Dirt);
@@ -79,5 +91,5 @@ fn setup(mut commands: Commands) {
         }
     }
 
-    commands.spawn(chunk);
+    commands.spawn((chunk, FlowField::default()));
 }

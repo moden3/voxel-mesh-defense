@@ -1,17 +1,16 @@
 use bevy::{
     prelude::*,
-    render::{
-        mesh::{Indices, PrimitiveTopology},
-        render_asset::RenderAssetUsages,
-    },
+    asset::RenderAssetUsages,
+    render::render_resource::PrimitiveTopology,
 };
+use bevy_mesh::Indices;
 use crate::voxel::{Chunk, VoxelType, CHUNK_SIZE};
 
 pub fn generate_chunk_system(
     mut commands: Commands,
+    mut query: Query<(Entity, &mut Chunk)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut query: Query<(Entity, &mut Chunk)>,
 ) {
     for (entity, mut chunk) in query.iter_mut() {
         if !chunk.is_dirty {
@@ -23,27 +22,7 @@ pub fn generate_chunk_system(
         let mut uvs = Vec::new();
         let mut indices = Vec::new();
 
-        // 6面の定義: (法線ベクトル, 頂点座標4つ)
-        let offsets = [
-            (Vec3::new(0.0, 0.0, 1.0), [ // Front
-                [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]
-            ]),
-            (Vec3::new(0.0, 0.0, -1.0), [ // Back
-                [0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5]
-            ]),
-            (Vec3::new(-1.0, 0.0, 0.0), [ // Left
-                [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5]
-            ]),
-            (Vec3::new(1.0, 0.0, 0.0), [ // Right
-                [0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]
-            ]),
-            (Vec3::new(0.0, 1.0, 0.0), [ // Top
-                [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5]
-            ]),
-            (Vec3::new(0.0, -1.0, 0.0), [ // Bottom
-                [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5]
-            ]),
-        ];
+        let mut index_offset = 0;
 
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
@@ -53,36 +32,81 @@ pub fn generate_chunk_system(
                         continue;
                     }
 
-                    let pos = Vec3::new(x as f32, y as f32, z as f32);
+                    // ... simple meshing logic ...
+                    // (To keep it brief but correct, we will add a simple cube meshing here)
+                    let fx = x as f32;
+                    let fy = y as f32;
+                    let fz = z as f32;
 
-                    // 隣接ボクセルをチェックして露出している面のみ描画（カリング最適化）
-                    let dirs = [
-                        (0, 0, 1), (0, 0, -1), (-1, 0, 0), (1, 0, 0), (0, 1, 0), (0, -1, 0)
-                    ];
-
-                    for (i, (dx, dy, dz)) in dirs.iter().enumerate() {
-                        let neighbor = chunk.get_voxel(x as i32 + dx, y as i32 + dy, z as i32 + dz);
-                        if neighbor == VoxelType::Empty {
-                            let start_idx = positions.len() as u32;
-                            let (normal, vertices) = &offsets[i];
-
-                            for v in vertices {
-                                positions.push([v[0] + pos.x, v[1] + pos.y, v[2] + pos.z]);
-                                normals.push([normal.x, normal.y, normal.z]);
-                                uvs.push([0.0, 0.0]); // 単純なUV
-                            }
-
-                            // 2つの三角形で1つの四角形面を表現
-                            indices.push(start_idx);
-                            indices.push(start_idx + 1);
-                            indices.push(start_idx + 2);
-                            indices.push(start_idx);
-                            indices.push(start_idx + 2);
-                            indices.push(start_idx + 3);
+                    let is_empty = |cx: i32, cy: i32, cz: i32| -> bool {
+                        if cx < 0 || cx >= CHUNK_SIZE as i32 ||
+                           cy < 0 || cy >= CHUNK_SIZE as i32 ||
+                           cz < 0 || cz >= CHUNK_SIZE as i32 {
+                            return true;
                         }
+                        chunk.get_voxel(cx, cy, cz) == VoxelType::Empty
+                    };
+
+                    let add_face = |
+                        positions: &mut Vec<[f32; 3]>,
+                        normals: &mut Vec<[f32; 3]>,
+                        uvs: &mut Vec<[f32; 2]>,
+                        indices: &mut Vec<u32>,
+                        idx_offset: &mut u32,
+                        face_positions: &[[f32; 3]; 4],
+                        normal: [f32; 3]
+                    | {
+                        for pos in face_positions.iter() {
+                            positions.push([pos[0] + fx, pos[1] + fy, pos[2] + fz]);
+                            normals.push(normal);
+                            uvs.push([0.0, 0.0]); // 簡易UV
+                        }
+                        indices.push(*idx_offset);
+                        indices.push(*idx_offset + 1);
+                        indices.push(*idx_offset + 2);
+                        indices.push(*idx_offset + 2);
+                        indices.push(*idx_offset + 3);
+                        indices.push(*idx_offset);
+                        *idx_offset += 4;
+                    };
+
+                    // Top
+                    if is_empty(x as i32, y as i32 + 1, z as i32) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]], [0.0, 1.0, 0.0]);
+                    }
+                    // Bottom
+                    if is_empty(x as i32, y as i32 - 1, z as i32) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]], [0.0, -1.0, 0.0]);
+                    }
+                    // Right
+                    if is_empty(x as i32 + 1, y as i32, z as i32) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]], [1.0, 0.0, 0.0]);
+                    }
+                    // Left
+                    if is_empty(x as i32 - 1, y as i32, z as i32) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], [-1.0, 0.0, 0.0]);
+                    }
+                    // Front
+                    if is_empty(x as i32, y as i32, z as i32 + 1) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]], [0.0, 0.0, 1.0]);
+                    }
+                    // Back
+                    if is_empty(x as i32, y as i32, z as i32 - 1) {
+                        add_face(&mut positions, &mut normals, &mut uvs, &mut indices, &mut index_offset,
+                            &[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]], [0.0, 0.0, -1.0]);
                     }
                 }
             }
+        }
+
+        if positions.is_empty() {
+            chunk.is_dirty = false;
+            continue;
         }
 
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
@@ -91,16 +115,13 @@ pub fn generate_chunk_system(
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_indices(Indices::U32(indices));
 
-        let material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.4, 0.8, 0.4), // 仮の草ブロック色
-            ..default()
-        });
-
-        commands.entity(entity).insert(PbrBundle {
-            mesh: meshes.add(mesh),
-            material,
-            ..default()
-        });
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.2, 0.8, 0.2), // グリーンのブロック
+                ..default()
+            })),
+        ));
 
         chunk.is_dirty = false;
     }

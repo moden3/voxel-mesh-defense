@@ -1,4 +1,6 @@
-use bevy::{input::mouse::MouseMotion, prelude::*};
+use bevy::prelude::*;
+use bevy::ecs::message::MessageReader;
+use bevy::input::mouse::MouseMotion;
 
 #[derive(Component)]
 pub struct FlyCamera {
@@ -22,12 +24,12 @@ impl Default for FlyCamera {
 pub fn fly_camera_system(
     mut q_camera: Query<(&mut Transform, &mut FlyCamera)>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut mouse_motion_events: EventReader<MouseMotion>,
+    mut mouse_motion_events: MessageReader<MouseMotion>,
     time: Res<Time>,
 ) {
-    let (mut transform, mut fly_cam) = match q_camera.get_single_mut() {
-        Ok(res) => res,
-        Err(_) => return,
+    let (mut transform, mut fly_cam) = match q_camera.iter_mut().next() {
+        Some(res) => res,
+        None => return,
     };
 
     let mut delta_mouse = Vec2::ZERO;
@@ -47,16 +49,16 @@ pub fn fly_camera_system(
 
     let mut direction = Vec3::ZERO;
     if keyboard_input.pressed(KeyCode::KeyW) {
-        direction += transform.forward().into();
+        direction += *transform.forward();
     }
     if keyboard_input.pressed(KeyCode::KeyS) {
-        direction += transform.back().into();
+        direction += *transform.back();
     }
     if keyboard_input.pressed(KeyCode::KeyA) {
-        direction += transform.left().into();
+        direction += *transform.left();
     }
     if keyboard_input.pressed(KeyCode::KeyD) {
-        direction += transform.right().into();
+        direction += *transform.right();
     }
     if keyboard_input.pressed(KeyCode::Space) {
         direction += Vec3::Y;
@@ -68,6 +70,6 @@ pub fn fly_camera_system(
     // 移動方向の正規化と適用
     if direction != Vec3::ZERO {
         direction = direction.normalize();
-        transform.translation += direction * fly_cam.speed * time.delta_seconds();
+        transform.translation += direction * fly_cam.speed * time.delta_secs();
     }
 }
