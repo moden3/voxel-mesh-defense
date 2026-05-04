@@ -1,0 +1,14 @@
+agent_workflow:
+  rules: "skills/skills/00_workflow_rules.md"
+  roles:
+    requirements_engineer: "skills/skills/01_requirements_engineer.md"
+    system_architect: "skills/skills/02_system_architect.md"
+    software_engineer: "skills/skills/03_software_engineer.md"
+    qa_engineer: "skills/skills/04_qa_engineer.md"
+    code_reviewer: "skills/skills/05_code_reviewer.md"
+    devops_engineer: "skills/skills/06_devops_engineer.md"
+
+instructions:
+  - "Antigravityエージェントとしてタスクを開始する際は、まずこのファイルの `agent_workflow.rules` と、現在の担当ロールに対応するmarkdownファイルを読み込んで(IsSkillFile: true)、スキルセットとして自身にインポートしてください。"
+  - "ユーザーから特別な指示がない限り、フェーズ順（要件定義 -> システム設計 -> 実装 -> テスト -> レビュー -> インフラ）に従って進行してください。"
+  - "要件の変更や追加が発生した場合は、必ず要件定義フェーズ（Requirements Engineer）に立ち戻り、Skillsを順番に実行して関連ドキュメント（要件定義書、設計書、手順書など）を更新してから実装に進んでください。"
