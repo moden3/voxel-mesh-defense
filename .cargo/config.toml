@@ -1,2 +1,7 @@
+# macroquadはwasm-server-runnerと互換性がないため、
+# cargo-makeのMakefile.tomlでビルド・実行を管理する。
+# `cargo run`はネイティブデバッグビルドとして残す。
+
 [target.wasm32-unknown-unknown]
-runner = "wasm-server-runner"
+# macroquadはwasm-bindgen非依存のため専用HTMLテンプレートが必要
+# runner は使用せず cargo make serve で起動する

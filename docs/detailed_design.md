@@ -1,60 +1,131 @@
 # 1. データモデル設計
-ゲーム内のコアデータはBevyのComponentとして定義されます。
+
+## コアデータ構造
 
 ```mermaid
 erDiagram
-    Chunk ||--o{ Voxel : contains
     Chunk {
-        int x
-        int y
-        int z
-        VoxelArray voxels
+        Vec voxels "32x32x32 = 1D Vec"
         bool is_dirty
     }
     Voxel {
-        VoxelType type
-        int pressure
+        VoxelType voxel_type "Empty/Stone/Dirt/Pipe/Marker/Enemy"
+        u8 pressure "エネルギー圧力値 0-255"
+        bool explored "探索済みかどうか"
     }
-    Worker ||--o| Transform : has
     Worker {
-        WorkerState state
-        float energy
+        f32 speed
+        WorkerState state "Idle/Moving/Working"
+        f32 energy
     }
-    Pipe ||--o| Transform : has
-    Pipe {
-        int capacity
-        int current_flow
+    FlowField {
+        Vec grid "1D Vec of Vec2 (XZ方向)"
     }
+    ViewState {
+        usize current_layer "現在表示中のYレイヤー"
+        usize map_size "マップの一辺サイズ"
+    }
+
+    Chunk ||--o{ Voxel : contains
+    FlowField ||--|| Chunk : references
+    Worker ||--o| ViewState : "描画位置の計算に使用"
 ```
 
-# 2. APIエンドポイント仕様
-本作はスタンドアロンゲームであるため、Web APIは存在しません。代わりに、システム間のメッセージング（BevyのEvents）をAPI仕様とみなします。
-- `Event<VoxelChangedEvent>`: ボクセルの破壊・設置時に発火し、メッシュ再生成とフローフィールド更新をトリガーする。
-- `Event<SpawnWorkerEvent>`: プレイヤーが空間上にマーカーを置いた際に発火し、ワーカーエンティティを生成する。
-- `Event<MarkerPlacedEvent>`: プレイヤーがボクセルをクリックしてマーカーを配置した際に発火し、フローフィールドの再計算をトリガーする。
+## VoxelType 定義
+```rust
+pub enum VoxelType {
+    Empty,      // 空洞・通路
+    Stone,      // 岩盤（掘削可能）
+    Dirt,       // 土（掘削可能・軟弱）
+    Pipe,       // エネルギーパイプ
+    Marker,     // 掘削/建設指示マーカー
+    Enemy,      // 敵（仮配置。将来はエンティティへ移行）
+}
+```
+
+# 2. イベント/メッセージ仕様
+
+Bevy Observer パターンを使用します。
+
+| イベント | 発火タイミング | 受信側 |
+|---|---|---|
+| `VoxelClickedEvent { x, y, z }` | プレイヤーがCanvasをクリック | ボクセル変更システム |
+| `MarkerPlacedEvent { position: Vec3 }` | 掘削マーカー配置 | フローフィールド再計算システム |
+| `SpawnWorkerEvent { position: Vec3 }` | マーカー配置後 | ワーカースポーンシステム |
+| `LayerChangedEvent { new_layer: usize }` | レイヤー切替 | 2Dレンダラー |
 
 # 3. 主要コンポーネント設計
-- **Voxel/Chunk System**: `Chunk` コンポーネントは 32x32x32 の固定サイズのボクセル配列を保持します。メッシュ生成システムは `is_dirty` フラグを監視し、変更があった場合のみ再生成処理（メッシング）を行います。
-- **Mouse Picking (DDA) System**: カメラからのレイ（光線）を飛ばし、3Dグリッド上をステップ実行する高速なDDA（Digital Differential Analyzer）アルゴリズムを用いて交差するボクセルを特定します。外部の物理エンジンに依存しません。
-- **Cellular Automaton System**: 毎フレーム（または固定Tick単位で）、`Pipe` コンポーネントを持つボクセルの `pressure`（背圧）を近接ボクセルへ伝播します。重力をシミュレートするため、下方向への伝播係数を高く設定します。
-- **Flow Field System**: 目的地（マーカー等）から幅優先探索（BFS）やDijkstraアルゴリズムを用いて各ボクセル空間の距離（コスト）を計算し、ワーカーが向かうべき方向（ベクター場）をキャッシュします。これにより数千のワーカーの経路探索コストを大幅に削減します。
-- **Swarm (Worker) System**: ワーカーエンティティは自身の現在座標からフローフィールドの方向ベクトルを参照し、キネマティック（直接座標更新）に移動します。
 
-# 4. 状態遷移と主要シーケンス
+## 3.1 Canvas2Dレンダラー（`src/renderer.rs`）
 
-以下は自律型ワーカー（スウォーム）の行動状態遷移です。
+```rust
+/// 毎フレーム呼ばれる2D描画システム
+/// BeyvのRenderパイプラインを使わず、web_sysのCanvas2D APIを直接操作する
+pub fn render_system(
+    view_state: Res<ViewState>,
+    chunk_query: Query<&Chunk>,
+    worker_query: Query<&Transform, With<Worker>>,
+    canvas: Res<CanvasResource>,
+)
+```
+
+- `CanvasResource`: `web_sys::CanvasRenderingContext2d` を `NonSend` リソースとして保持する。
+- タイルサイズは `TILE_PX: u32 = 16` ピクセル。
+- 現在の `view_state.current_layer` 番目のY層のみを描画する。
+
+## 3.2 入力システム（`src/input.rs`）
+
+- **マウスクリック**: Canvasの `onclick` イベントをwasm-bindgenでフック → クリック座標をタイル座標に変換 → `VoxelClickedEvent` を発火。
+- **キーボード**: `[` / `]` キーでレイヤー切替 → `LayerChangedEvent` を発火。
+
+## 3.3 ゲームアプリのメインループ
+
+```rust
+// Bevyのデスクトップウィンドウを使わず、wasm-bindgenのrAFループで管理する
+pub fn start_game() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
+        Duration::from_secs_f64(1.0 / 60.0), // 60fps
+    )));
+    // ... システム登録
+    app.run();
+}
+```
+
+## 3.4 ボクセル管理（`src/voxel.rs`）
+- `Chunk` は1次元 `Vec<VoxelType>` でヒープ確保（スタックオーバーフロー対策）。
+- `get_idx(x, y, z)` で線形インデックス変換。
+
+## 3.5 フローフィールド（`src/flow_field.rs`）
+- 2D方向ベクトル `Vec2` のみを保持（Z軸は現レイヤー固定）。
+- BFS による幅優先探索でフローフィールドを構築。
+
+# 4. 状態遷移
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> MovingToTarget : マーカー検知
-    MovingToTarget --> Working : 目的地到達
-    Working --> MovingToNode : エネルギー低下
-    MovingToNode --> Recharging : インフラノード到達
-    Recharging --> Idle : 充電完了
+    [*] --> Loading: WASM初期化
+    Loading --> Playing: Canvas取得 + 地形生成完了
+    Playing --> Playing: 毎フレーム更新（入力・ロジック・描画）
+    Playing --> LayerSwitch: []/[]キー入力
+    LayerSwitch --> Playing: 表示レイヤー変更完了
 ```
 
-# 5. エラーハンドリング方針
-- チャンク境界外へのボクセルアクセス（範囲外参照）試行時は、Panicを避け安全に `VoxelType::Empty` を返却する方針とします。
-- WASM（ブラウザ）環境では、`console_error_panic_hook` を使用してパニック発生時にブラウザのコンソールへ詳細なスタックトレースを出力します。
-- メモリ不足やエンティティ生成失敗などの予期せぬエラー時には、例外を握りつぶさず、Bevyの `error!` マクロを用いてコンソールにエラーログを出力し、安全にステートをフォールバックします。
+# 5. ファイル構成
+
+```
+src/
+  lib.rs          # wasm-bindgenエントリポイント（start_game関数をexport）
+  main.rs         # 削除 or スタブのみ
+  voxel.rs        # VoxelType / Chunk 定義
+  flow_field.rs   # FlowField + BFSロジック
+  swarm.rs        # Worker コンポーネント + 移動システム
+  renderer.rs     # Canvas2D 描画システム（NEW）
+  input.rs        # マウス/キーボード入力処理（NEW）
+  game.rs         # App構築・システム登録（NEW）
+```
+
+# 6. エラーハンドリング方針
+- WASM初期化時のCanvasDOM取得失敗は `panic!` で即座にブラウザコンソールへ出力（`console_error_panic_hook`）。
+- ボクセルの範囲外アクセスは `VoxelType::Empty` を返却（パニックしない）。
+- Bevy の `warn!` / `error!` マクロでブラウザコンソールへログ出力。

@@ -1,21 +1,17 @@
 [package]
 name = "voxel-mesh-defense"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-bevy = "0.18.1"
-bevy_mesh = "0.18.1"
+# WASM対応済みの軽量2Dゲームライブラリ。Bevyの代替として採用。
+macroquad = "0.4"
 noise = "0.9.0"
-rand = "0.10.1"
 
 # WASMターゲットでJavaScriptのrandom APIを使って乱数を生成する
-# getrandom 0.4.x (rand 0.10 経由) はwasm_jsフィーチャーが必要
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.4", features = ["wasm_js"] }
-console_error_panic_hook = "0.1.7"
+getrandom = { version = "0.2", features = ["js"] }
 
-# 開発用WASMビルドでも速度を確保するため最適化レベルを上げる
 [profile.dev]
 opt-level = 1
 

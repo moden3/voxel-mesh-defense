@@ -1,0 +1,47 @@
+[config]
+default_to_workspace = false
+
+# WASMビルドしてwww/に配置し、basic-http-serverで起動する
+[tasks.serve]
+description = "WASMビルドしてブラウザで起動する"
+dependencies = ["build-wasm", "copy-wasm", "start-server"]
+
+[tasks.build-wasm]
+description = "WASMリリースビルド"
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
+
+[tasks.build-wasm-dev]
+description = "WASMデバッグビルド"
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown"]
+
+[tasks.copy-wasm]
+description = "WASMファイルをwww/にコピー"
+script = '''
+cp target/wasm32-unknown-unknown/release/voxel-mesh-defense.wasm www/
+'''
+
+[tasks.copy-wasm-dev]
+script = '''
+cp target/wasm32-unknown-unknown/debug/voxel-mesh-defense.wasm www/
+'''
+
+[tasks.start-server]
+description = "basic-http-serverでwww/を配信 (http://localhost:8080)"
+command = "basic-http-server"
+args = ["www"]
+
+[tasks.serve-dev]
+description = "開発用WASMビルド + サーバー起動"
+dependencies = ["build-wasm-dev", "copy-wasm-dev", "start-server"]
+
+[tasks.test]
+description = "ユニットテストをネイティブで実行"
+command = "cargo"
+args = ["test"]
+
+[tasks.check-wasm]
+description = "WASMコンパイルチェック"
+command = "cargo"
+args = ["check", "--target", "wasm32-unknown-unknown"]

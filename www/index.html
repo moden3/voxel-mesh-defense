@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Voxel Mesh Defense</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <!-- macroquadはこのcanvas要素を使って描画する -->
+    <canvas id="glcanvas" tabindex="1"></canvas>
+    <!-- macroquad/miniquad WASMランタイム（CDN） -->
+    <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
+    <script>
+        load("./voxel-mesh-defense.wasm");
+    </script>
+</body>
+</html>

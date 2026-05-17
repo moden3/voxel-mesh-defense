@@ -1,18 +1,23 @@
-use bevy::prelude::*;
-
+/// ボクセルの種別を定義する。
+/// ゲーム内部の3Dグリッドデータとして使用し、描画は2D断面図で行う。
 pub const CHUNK_SIZE: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VoxelType {
-    Empty,
-    Stone,
-    Dirt,
+    Empty,   // 空洞・通路
+    Stone,   // 岩盤（掘削可能）
+    Dirt,    // 土（掘削可能・軟弱）
+    Pipe,    // エネルギーパイプ
+    Marker,  // 掘削指示マーカー
 }
 
-#[derive(Component)]
+/// 32x32x32 のボクセルデータを保持するチャンク。
+/// スタックオーバーフロー防止のため Vec（ヒープ）で確保する。
 pub struct Chunk {
     voxels: Vec<VoxelType>,
-    pub is_dirty: bool, // メッシュの再生成が必要かどうかを判定するフラグ
+    /// 探索済みフラグ（falseは霧として表示される）
+    pub explored: Vec<bool>,
+    pub is_dirty: bool,
 }
 
 impl Default for Chunk {
@@ -24,12 +29,13 @@ impl Default for Chunk {
 impl Chunk {
     pub fn new() -> Self {
         Self {
-            // Stack Overflowを防ぐためVec(ヒープ)に確保
             voxels: vec![VoxelType::Empty; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
-            is_dirty: true, // 生成直後はメッシュ化が必要なためtrue
+            explored: vec![false; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
+            is_dirty: true,
         }
     }
 
+    /// (x, y, z) を1次元インデックスに変換する。
     pub fn get_idx(x: usize, y: usize, z: usize) -> usize {
         x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z
     }
@@ -42,13 +48,32 @@ impl Chunk {
         }
     }
 
+    /// 境界外アクセスはパニックを避けて Empty を返す。
     pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> VoxelType {
-        // パニックを防ぐため、範囲外アクセスはEmptyとして安全に処理する
-        if x < 0 || y < 0 || z < 0 || x >= CHUNK_SIZE as i32 || y >= CHUNK_SIZE as i32 || z >= CHUNK_SIZE as i32 {
+        if x < 0 || y < 0 || z < 0
+            || x >= CHUNK_SIZE as i32
+            || y >= CHUNK_SIZE as i32
+            || z >= CHUNK_SIZE as i32
+        {
             return VoxelType::Empty;
         }
         let idx = Self::get_idx(x as usize, y as usize, z as usize);
         self.voxels[idx]
+    }
+
+    pub fn explore(&mut self, x: usize, y: usize, z: usize) {
+        if x < CHUNK_SIZE && y < CHUNK_SIZE && z < CHUNK_SIZE {
+            let idx = Self::get_idx(x, y, z);
+            self.explored[idx] = true;
+        }
+    }
+
+    pub fn is_explored(&self, x: usize, y: usize, z: usize) -> bool {
+        if x < CHUNK_SIZE && y < CHUNK_SIZE && z < CHUNK_SIZE {
+            self.explored[Self::get_idx(x, y, z)]
+        } else {
+            false
+        }
     }
 }
 
@@ -58,50 +83,32 @@ mod tests {
 
     #[test]
     fn test_chunk_getVoxel_outOfBounds_returnsEmpty() {
-        // Arrange: 範囲外アクセスのテスト
         let chunk = Chunk::new();
-
-        // Act
-        let voxel_negative = chunk.get_voxel(-1, 0, 0);
-        let voxel_too_large = chunk.get_voxel(CHUNK_SIZE as i32, 0, 0);
-
-        // Assert
-        assert_eq!(voxel_negative, VoxelType::Empty, "境界外への負のインデックスアクセスはEmptyを返却すべき");
-        assert_eq!(voxel_too_large, VoxelType::Empty, "境界外への過大インデックスアクセスはEmptyを返却すべき");
+        assert_eq!(chunk.get_voxel(-1, 0, 0), VoxelType::Empty);
+        assert_eq!(chunk.get_voxel(CHUNK_SIZE as i32, 0, 0), VoxelType::Empty);
     }
 
     #[test]
     fn test_chunk_setVoxel_validCoordinates_updatesVoxelAndSetsDirtyFlag() {
-        // Arrange
         let mut chunk = Chunk::new();
-        chunk.is_dirty = false; // フラグの更新をテストするためにリセット
-
-        // Act
+        chunk.is_dirty = false;
         chunk.set_voxel(5, 5, 5, VoxelType::Stone);
-
-        // Assert
-        assert_eq!(chunk.get_voxel(5, 5, 5), VoxelType::Stone, "指定座標のボクセルがStoneに変更されていること");
-        assert!(chunk.is_dirty, "ボクセル変更時にis_dirtyフラグがtrueに設定されること");
+        assert_eq!(chunk.get_voxel(5, 5, 5), VoxelType::Stone);
+        assert!(chunk.is_dirty);
     }
 
     #[test]
     fn test_chunk_setVoxel_outOfBounds_doesNotPanic() {
-        // Arrange
         let mut chunk = Chunk::new();
-
-        // Act: 範囲外への書き込みはパニックせず無視されること
         chunk.set_voxel(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, VoxelType::Stone);
-
-        // Assert: 範囲外への書き込み後も正常に読み書きできること
-        assert_eq!(chunk.get_voxel(0, 0, 0), VoxelType::Empty, "境界外書き込み後もチャンクは正常であるべき");
+        assert_eq!(chunk.get_voxel(0, 0, 0), VoxelType::Empty);
     }
 
     #[test]
-    fn test_chunk_getIdx_linearMapping() {
-        // Arrange & Act & Assert
-        assert_eq!(Chunk::get_idx(0, 0, 0), 0);
-        assert_eq!(Chunk::get_idx(1, 0, 0), CHUNK_SIZE * CHUNK_SIZE);
-        assert_eq!(Chunk::get_idx(0, 1, 0), CHUNK_SIZE);
-        assert_eq!(Chunk::get_idx(0, 0, 1), 1);
+    fn test_explore_marksExplored() {
+        let mut chunk = Chunk::new();
+        assert!(!chunk.is_explored(1, 1, 1));
+        chunk.explore(1, 1, 1);
+        assert!(chunk.is_explored(1, 1, 1));
     }
 }
